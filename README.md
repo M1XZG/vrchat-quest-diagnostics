@@ -18,6 +18,12 @@ The collector records:
 - Meta Quest Link services, devices, configuration, and recent logs
 - Steam, SteamVR, OpenVR, and VRChat configuration and recent logs
 - Live CPU, memory, disk, network, GPU-engine, and relevant process telemetry
+- Live throughput and error counters for every PC network adapter
+- Default-gateway latency for the PC's active route
+- Optional direct headset latency when its IPv4 address is supplied or detected
+- Steam Link bad-link events, delivery delay, bitrate mode, timeouts, resets,
+  disconnects, and compositor watchdog activity
+- WLAN, Ethernet, route, connection-profile, and network-driver events
 - NVIDIA telemetry through `nvidia-smi` when available
 - AMD telemetry through `amd-smi` when available
 - DirectX, display, OpenXR, and installed VR software information
@@ -25,6 +31,13 @@ The collector records:
 Windows-native collection remains available when no vendor utility is
 installed. Intel and AMD CPUs follow the same diagnostic path. NVIDIA, AMD, and
 Intel graphics adapters are identified automatically.
+
+The collector treats the PC uplink and headset transport separately. Common
+topologies include:
+
+- PC on Ethernet with the headset using Air Link, Steam Link, or Virtual Desktop
+- PC and headset both using Wi-Fi
+- PC on Ethernet or Wi-Fi with the headset using a USB Link cable
 
 The script does not install software, change drivers, edit application settings,
 or run stress tests.
@@ -47,6 +60,17 @@ For a quick five-minute capture:
 ```powershell
 powershell.exe -ExecutionPolicy Bypass -File "$HOME\Downloads\Collect-VRChat-Quest-Diagnostics.ps1" -SampleSeconds 300
 ```
+
+If the headset has a known local IPv4 address, provide it for direct latency and
+packet-loss sampling:
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass -File "$HOME\Downloads\Collect-VRChat-Quest-Diagnostics.ps1" -HeadsetAddress "192.168.1.50" -SampleSeconds 2700
+```
+
+When no address is supplied, the collector attempts to identify a likely
+private headset address from active SteamVR or Steam Link logs. No LAN scan is
+performed.
 
 ## Privacy
 
@@ -94,11 +118,16 @@ An effective analysis should compare:
 - VRChat's output log
 - Windows events and reliability history
 - current errors versus stale or repeatedly submitted WER reports
+- the PC's active Ethernet or Wi-Fi route, gateway latency, adapter errors, and
+  the headset transport reported by Meta, Steam Link, or Virtual Desktop
 
 ## Limitations
 
 - The collector covers the Windows PC side. It does not retrieve Android logs
   from the Quest headset.
+- A PC connected by Ethernet cannot directly measure the headset's Wi-Fi signal.
+  In that topology, the bundle combines PC-to-router measurements with
+  application-reported headset latency, bitrate, packet loss, and disconnects.
 - CPU temperatures are available only when exposed through ACPI or another
   installed monitoring provider.
 - Vendor utilities differ by driver and hardware generation, so unsupported
@@ -113,3 +142,10 @@ The script targets Windows PowerShell 5.1. Validate its syntax with:
 ```powershell
 powershell.exe -NoProfile -File ".\tests\Validate-Collector.ps1"
 ```
+
+## Contributing
+
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) before opening a pull request. Use the
+repository's issue forms for reproducible bugs and feature requests. Do not post
+unreviewed diagnostic ZIPs, crash dumps, tokens, or personal identifiers in a
+public issue.

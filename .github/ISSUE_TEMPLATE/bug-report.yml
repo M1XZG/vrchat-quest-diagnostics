@@ -1,0 +1,71 @@
+name: Bug report
+description: Report incorrect, incomplete, or failed diagnostic collection.
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not upload an unreviewed diagnostic ZIP or crash dump to a public issue.
+        Remove usernames, device serials, account IDs, network identifiers, and tokens.
+  - type: input
+    id: collector-version
+    attributes:
+      label: Collector version or commit
+      description: Use the release version or Git commit SHA.
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: Windows version
+      placeholder: Windows 11 25H2, build 26200
+    validations:
+      required: true
+  - type: input
+    id: hardware
+    attributes:
+      label: CPU, GPU, and headset
+      placeholder: Ryzen 7 / Radeon RX / Quest 3
+    validations:
+      required: true
+  - type: dropdown
+    id: transport
+    attributes:
+      label: Headset transport
+      options:
+        - Wired Quest Link
+        - Air Link
+        - Steam Link
+        - Virtual Desktop
+        - Other or unknown
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: What happened?
+      description: Include the collector step, visible error, and expected result.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Redacted evidence
+      description: Paste only the smallest redacted excerpt needed to show the problem.
+  - type: checkboxes
+    id: confirmations
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues.
+          required: true
+        - label: I removed private information and did not attach an unreviewed ZIP or dump.
+          required: true
