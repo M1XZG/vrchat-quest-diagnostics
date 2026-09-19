@@ -1,0 +1,19 @@
+name: Validate collector
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse and validate collector
+        shell: powershell
+        run: .\tests\Validate-Collector.ps1
