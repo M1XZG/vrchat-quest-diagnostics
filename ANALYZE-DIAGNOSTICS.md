@@ -41,14 +41,23 @@ Method:
    old dump as one historical incident, not many new crashes. Use EventTime,
    report identifiers, dump paths, and operating-system build numbers where
    available.
-8. Check USB connection transitions, WinUSB errors, headset-ready state,
-   session termination reasons, first-frame latency, frame loss, encoder
-   performance, bitrate, network latency, and whether the headset remained
-   physically attached.
-9. Check whether VRChat used OculusLoader, OpenXR, SteamVR/OpenVR, or another
+8. Determine the PC's LAN connection independently from the headset transport.
+   The PC may use Ethernet while the headset uses Wi-Fi. Check active routes,
+   connection profiles, adapter throughput/errors, gateway latency, WLAN events,
+   and application-reported headset transport.
+9. For wired Link, check USB transitions, WinUSB errors, whether the headset
+   remained physically attached, and USB session termination reasons. For Air
+   Link, Steam Link, or Virtual Desktop, check bitrate, network RTT, jitter,
+   packet loss, Wi-Fi signal when available, and reconnect events.
+10. When Steam Link data exists, review steam-link-health.csv and the underlying
+    driver_vrlink, vrserver, and vrcompositor logs. Correlate bad-link events,
+    maximum delivery delay, bitrate changes, auto/adaptive state, holdoff,
+    accepted-video-packet timeouts, resets, disconnects, and compositor
+    watchdogs with gateway and headset ping results.
+11. Check whether VRChat used OculusLoader, OpenXR, SteamVR/OpenVR, or another
    runtime. Note any simultaneous or conflicting VR stacks, overlays, beta
    channels, or virtual display/audio drivers.
-10. Review CPU, RAM, storage, WHEA, display-driver, and Device Manager evidence.
+12. Review CPU, RAM, storage, WHEA, display-driver, and Device Manager evidence.
     Do not diagnose failing hardware from a single stale report or an unsupported
     sensor reading.
 

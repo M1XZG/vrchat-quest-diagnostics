@@ -31,6 +31,11 @@
     Include relevant application crash dumps. Disabled by default because dump
     files can contain fragments of private memory and greatly increase ZIP size.
 
+.PARAMETER HeadsetAddress
+    Optional headset IPv4 address for direct latency and packet-loss sampling.
+    When omitted, the collector attempts to identify a private headset address
+    from current SteamVR/Steam Link logs.
+
 .EXAMPLE
     powershell.exe -ExecutionPolicy Bypass -File .\Collect-VRChat-Quest-Diagnostics.ps1
 
@@ -53,12 +58,38 @@ param(
 
     [string]$OutputDirectory = [Environment]::GetFolderPath("Desktop"),
 
-    [switch]$IncludeCrashDumps
+    [switch]$IncludeCrashDumps,
+
+    [string]$HeadsetAddress
 )
 
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = "Continue"
 $ProgressPreference = "SilentlyContinue"
+
+if ($HeadsetAddress) {
+    $parsedHeadsetAddress = $null
+    if (
+        -not [System.Net.IPAddress]::TryParse(
+            $HeadsetAddress,
+            [ref]$parsedHeadsetAddress
+        ) -or
+        $parsedHeadsetAddress.AddressFamily -ne
+            [System.Net.Sockets.AddressFamily]::InterNetwork
+    ) {
+        throw "HeadsetAddress must be a private IPv4 address."
+    }
+
+    $octets = $parsedHeadsetAddress.GetAddressBytes()
+    $isPrivateHeadsetAddress = (
+        $octets[0] -eq 10 -or
+        ($octets[0] -eq 172 -and $octets[1] -ge 16 -and $octets[1] -le 31) -or
+        ($octets[0] -eq 192 -and $octets[1] -eq 168)
+    )
+    if (-not $isPrivateHeadsetAddress) {
+        throw "HeadsetAddress must be a private LAN address."
+    }
+}
 
 function Test-Administrator {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -80,6 +111,9 @@ if (-not (Test-Administrator)) {
     )
     if ($IncludeCrashDumps) {
         $arguments += "-IncludeCrashDumps"
+    }
+    if ($HeadsetAddress) {
+        $arguments += @("-HeadsetAddress", "`"$HeadsetAddress`"")
     }
     try {
         Start-Process -FilePath "powershell.exe" -Verb RunAs -ArgumentList $arguments
@@ -255,6 +289,107 @@ function Get-AmdSmi {
     }
 
     return $null
+}
+
+function Get-DefaultIpv4Gateway {
+    try {
+        return Get-NetRoute -AddressFamily IPv4 -DestinationPrefix "0.0.0.0/0" `
+            -ErrorAction Stop |
+            Where-Object { $_.NextHop -and $_.NextHop -ne "0.0.0.0" } |
+            Sort-Object RouteMetric, InterfaceMetric |
+            Select-Object -First 1
+    }
+    catch {
+        return $null
+    }
+}
+
+function Find-HeadsetIpv4FromSteamLogs {
+    param([string[]]$SteamRoots)
+
+    $localAddresses = @(
+        Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+            Select-Object -ExpandProperty IPAddress
+    )
+    $gateway = Get-DefaultIpv4Gateway
+    $excluded = @($localAddresses)
+    if ($gateway) {
+        $excluded += $gateway.NextHop
+    }
+
+    $candidates = [System.Collections.Generic.List[string]]::new()
+    foreach ($steamRoot in $SteamRoots) {
+        foreach ($name in @("driver_vrlink.txt", "vrserver.txt")) {
+            $path = Join-Path (Join-Path $steamRoot "logs") $name
+            if (-not (Test-Path -LiteralPath $path)) {
+                continue
+            }
+            $tail = Get-Content -LiteralPath $path -Tail 2500 -ErrorAction SilentlyContinue
+            foreach ($line in $tail) {
+                foreach ($match in [regex]::Matches(
+                    $line,
+                    '\b(?:10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})\b'
+                )) {
+                    if ($match.Value -notin $excluded) {
+                        $candidates.Add($match.Value)
+                    }
+                }
+            }
+        }
+    }
+
+    return $candidates |
+        Group-Object |
+        Sort-Object Count -Descending |
+        Select-Object -First 1 -ExpandProperty Name
+}
+
+function Read-AppendedText {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Path,
+
+        [Parameter(Mandatory)]
+        [hashtable]$Offsets
+    )
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        return ""
+    }
+
+    $length = (Get-Item -LiteralPath $Path).Length
+    if (-not $Offsets.ContainsKey($Path)) {
+        $Offsets[$Path] = $length
+        return ""
+    }
+    if ($length -lt $Offsets[$Path]) {
+        $Offsets[$Path] = 0
+    }
+    if ($length -eq $Offsets[$Path]) {
+        return ""
+    }
+
+    $stream = [System.IO.File]::Open(
+        $Path,
+        [System.IO.FileMode]::Open,
+        [System.IO.FileAccess]::Read,
+        [System.IO.FileShare]::ReadWrite
+    )
+    try {
+        [void]$stream.Seek($Offsets[$Path], [System.IO.SeekOrigin]::Begin)
+        $reader = [System.IO.StreamReader]::new($stream, $true)
+        try {
+            $text = $reader.ReadToEnd()
+            $Offsets[$Path] = $stream.Position
+            return $text
+        }
+        finally {
+            $reader.Dispose()
+        }
+    }
+    finally {
+        $stream.Dispose()
+    }
 }
 
 function Get-SteamRoots {
@@ -920,7 +1055,7 @@ Invoke-Step "Collecting installed VR software, services, and processes" {
                     ""
                 }
                 "$displayName $publisher" -match
-                    "Steam|SteamVR|VRChat|Oculus|Meta Quest|OpenXR|Virtual Desktop|VIVE|Pimax|fpsVR|OVR Toolkit|VRCX"
+                    "Steam|SteamVR|VRChat|Oculus|Meta Quest|OpenXR|Virtual Desktop|ALVR|VIVE|Pimax|fpsVR|OVR Toolkit|VRCX"
             } |
             Select-Object DisplayName, DisplayVersion, Publisher,
                 InstallDate, InstallLocation
@@ -1204,7 +1339,7 @@ Invoke-Step "Collecting power, virtualization, and security state" {
     }
 }
 
-Invoke-Step "Collecting network and Air Link evidence" {
+Invoke-Step "Collecting PC network and wireless VR evidence" {
     Export-Objects -Path (Join-Path $dirs.Network "network-adapters.csv") -Command {
         Get-NetAdapter -IncludeHidden |
             Select-Object Name, InterfaceDescription, Status, LinkSpeed,
@@ -1224,15 +1359,39 @@ Invoke-Step "Collecting network and Air Link evidence" {
     }
     Save-NativeCommand -Path (Join-Path $dirs.Network "routes.txt") `
         -Executable "route.exe" -Arguments @("print")
+    Export-Objects -Path (Join-Path $dirs.Network "connection-profiles.csv") -Command {
+        Get-NetConnectionProfile -ErrorAction SilentlyContinue |
+            Select-Object Name, InterfaceAlias, InterfaceIndex, NetworkCategory,
+                IPv4Connectivity, IPv6Connectivity
+    }
+    Export-Objects -Path (Join-Path $dirs.Network "default-routes.csv") -Command {
+        Get-NetRoute -DestinationPrefix "0.0.0.0/0" -ErrorAction SilentlyContinue |
+            Select-Object InterfaceAlias, InterfaceIndex, NextHop,
+                RouteMetric, InterfaceMetric, State, PolicyStore
+    }
     Save-NativeCommand -Path (Join-Path $dirs.Network "tcp-global.txt") `
         -Executable "netsh.exe" -Arguments @("interface", "tcp", "show", "global")
     Save-NativeCommand -Path (Join-Path $dirs.Network "wifi-interface.txt") `
         -Executable "netsh.exe" -Arguments @("wlan", "show", "interfaces")
     Save-NativeCommand -Path (Join-Path $dirs.Network "wifi-drivers.txt") `
         -Executable "netsh.exe" -Arguments @("wlan", "show", "drivers")
+    Save-NativeCommand -Path (Join-Path $dirs.Network "network-interfaces.txt") `
+        -Executable "netsh.exe" -Arguments @("interface", "show", "interface")
     Export-Objects -Path (Join-Path $dirs.Network "adapter-advanced-properties.csv") -Command {
         Get-NetAdapterAdvancedProperty -AllProperties -ErrorAction SilentlyContinue |
             Select-Object Name, DisplayName, DisplayValue, RegistryKeyword, RegistryValue
+    }
+
+    Export-EventCsv -Name "WLAN-AutoConfig-Events" -Filter @{
+        LogName = "Microsoft-Windows-WLAN-AutoConfig/Operational"
+        StartTime = $script:StartTime
+    }
+    Export-EventCsv -Name "Network-Driver-and-Connectivity-Events" -Filter @{
+        LogName = "System"
+        StartTime = $script:StartTime
+    } -Where {
+        $_.ProviderName -match "NDIS|Tcpip|Dhcp|DNS|Netwtw|e1d|e2f|rt640x64|WLAN" -or
+        $_.Message -match "network|wireless|Wi-Fi|Ethernet|adapter|link.*(down|up)"
     }
 }
 
@@ -1255,6 +1414,42 @@ $liveProcessesPath = Join-Path $dirs.Live "vr-processes.csv"
 $liveGpuPath = Join-Path $dirs.Live "nvidia-gpu.csv"
 $liveAmdGpuPath = Join-Path $dirs.Live "amd-gpu.jsonl"
 $liveGpuEnginesPath = Join-Path $dirs.Live "gpu-engines.csv"
+$liveNetworkPath = Join-Path $dirs.Live "network-adapters.csv"
+$liveGatewayPath = Join-Path $dirs.Live "gateway-latency.csv"
+$liveHeadsetPath = Join-Path $dirs.Live "headset-latency.csv"
+$liveRoutePath = Join-Path $dirs.Live "default-route.csv"
+$liveWifiPath = Join-Path $dirs.Live "wifi-interface-samples.txt"
+$liveSteamLinkPath = Join-Path $dirs.Live "steam-link-health.csv"
+$defaultGateway = Get-DefaultIpv4Gateway
+$headsetPingTarget = $HeadsetAddress
+$steamLogOffsets = @{}
+$steamLinkLogs = @()
+foreach ($steamRoot in $steamRoots) {
+    foreach ($name in @("driver_vrlink.txt", "vrserver.txt", "vrcompositor.txt")) {
+        $path = Join-Path (Join-Path $steamRoot "logs") $name
+        if (Test-Path -LiteralPath $path) {
+            $steamLinkLogs += $path
+            $steamLogOffsets[$path] = (Get-Item -LiteralPath $path).Length
+        }
+    }
+}
+if (-not $headsetPingTarget) {
+    $headsetPingTarget = Find-HeadsetIpv4FromSteamLogs -SteamRoots $steamRoots
+}
+$headsetDetection = if ($HeadsetAddress) {
+    "Provided"
+}
+elseif ($headsetPingTarget) {
+    "DetectedFromSteamLogs"
+}
+else {
+    "NotDetected"
+}
+@(
+    "Headset IPv4 target: $headsetPingTarget"
+    "Detection method: $headsetDetection"
+    "The target is used only for passive ICMP latency/loss sampling."
+) | Set-Content -LiteralPath (Join-Path $dirs.Network "headset-ping-target.txt") -Encoding UTF8
 $script:SamplesCollected = 0
 $script:SampleStoppedEarly = $false
 
@@ -1333,7 +1528,7 @@ while ((Get-Date) -lt $sampleDeadline) {
         Get-CimInstance Win32_PerfFormattedData_PerfProc_Process |
             Where-Object {
                 $_.Name -match
-                    "^(VRChat|vrserver|vrcompositor|vrmonitor|vrdashboard|vrwebhelper|steam|steamwebhelper|OVRServer.*|OVRService.*|Oculus.*|oculus.*|VirtualDesktop.*|VRCX.*|OpenXR.*|fpsVR.*|OVRToolkit.*)(#\d+)?$"
+                    "^(VRChat|vrserver|vrcompositor|vrmonitor|vrdashboard|vrwebhelper|steam|steamwebhelper|OVRServer.*|OVRService.*|Oculus.*|oculus.*|VirtualDesktop.*|ALVR.*|VRCX.*|OpenXR.*|fpsVR.*|OVRToolkit.*)(#\d+)?$"
             } |
             ForEach-Object {
                 [pscustomobject]@{
@@ -1377,6 +1572,255 @@ while ((Get-Date) -lt $sampleDeadline) {
     }
 
     if (($sampleNumber % 5) -eq 1) {
+        try {
+            $networkRates = @(
+                Get-CimInstance Win32_PerfFormattedData_Tcpip_NetworkInterface `
+                    -ErrorAction Stop
+            )
+            $adapterStatistics = @{}
+            foreach ($adapter in Get-NetAdapterStatistics -ErrorAction SilentlyContinue) {
+                $adapterStatistics[$adapter.Name] = $adapter
+            }
+
+            foreach ($networkRate in $networkRates) {
+                $adapter = Get-NetAdapter -IncludeHidden -ErrorAction SilentlyContinue |
+                    Where-Object {
+                        $_.InterfaceDescription -eq $networkRate.Name -or
+                        ($_.InterfaceDescription -replace '[#()]', '') -eq
+                            ($networkRate.Name -replace '[#()]', '')
+                    } |
+                    Select-Object -First 1
+                $statistics = if ($adapter) {
+                    $adapterStatistics[$adapter.Name]
+                }
+                else {
+                    $null
+                }
+
+                [pscustomobject]@{
+                    Timestamp = $sampleTime.ToString("o")
+                    PerformanceCounterName = $networkRate.Name
+                    AdapterName = if ($adapter) { $adapter.Name } else { "" }
+                    InterfaceDescription = if ($adapter) {
+                        $adapter.InterfaceDescription
+                    }
+                    else {
+                        ""
+                    }
+                    Status = if ($adapter) { $adapter.Status } else { "" }
+                    LinkSpeed = if ($adapter) { $adapter.LinkSpeed } else { "" }
+                    BytesTotalPerSecond = $networkRate.BytesTotalPersec
+                    BytesReceivedPerSecond = $networkRate.BytesReceivedPersec
+                    BytesSentPerSecond = $networkRate.BytesSentPersec
+                    PacketsPerSecond = $networkRate.PacketsPersec
+                    ReceivedPacketErrors = if ($statistics) {
+                        $statistics.ReceivedPacketErrors
+                    }
+                    else {
+                        ""
+                    }
+                    OutboundPacketErrors = if ($statistics) {
+                        $statistics.OutboundPacketErrors
+                    }
+                    else {
+                        ""
+                    }
+                    ReceivedDiscardedPackets = if ($statistics) {
+                        $statistics.ReceivedDiscardedPackets
+                    }
+                    else {
+                        ""
+                    }
+                    OutboundDiscardedPackets = if ($statistics) {
+                        $statistics.OutboundDiscardedPackets
+                    }
+                    else {
+                        ""
+                    }
+                } | Export-Csv -LiteralPath $liveNetworkPath -Append `
+                    -NoTypeInformation -Encoding UTF8
+            }
+        }
+        catch {
+            Write-CollectionError -Step "Live network sample $sampleNumber" -ErrorRecord $_
+        }
+
+        $currentGateway = Get-DefaultIpv4Gateway
+        if ($currentGateway) {
+            $defaultGateway = $currentGateway
+            [pscustomobject]@{
+                Timestamp = $sampleTime.ToString("o")
+                InterfaceAlias = $defaultGateway.InterfaceAlias
+                InterfaceIndex = $defaultGateway.InterfaceIndex
+                NextHop = $defaultGateway.NextHop
+                RouteMetric = $defaultGateway.RouteMetric
+            } | Export-Csv -LiteralPath $liveRoutePath -Append `
+                -NoTypeInformation -Encoding UTF8
+        }
+
+        if ($defaultGateway) {
+            try {
+                $escapedGateway = $defaultGateway.NextHop.Replace("'", "''")
+                $ping = Get-CimInstance Win32_PingStatus `
+                    -Filter ("Address='{0}'" -f $escapedGateway) -ErrorAction Stop
+                [pscustomobject]@{
+                    Timestamp = $sampleTime.ToString("o")
+                    InterfaceAlias = $defaultGateway.InterfaceAlias
+                    InterfaceIndex = $defaultGateway.InterfaceIndex
+                    Gateway = $defaultGateway.NextHop
+                    StatusCode = $ping.StatusCode
+                    ResponseTimeMs = $ping.ResponseTime
+                } | Export-Csv -LiteralPath $liveGatewayPath -Append `
+                    -NoTypeInformation -Encoding UTF8
+            }
+            catch {
+                Write-CollectionError -Step "Gateway latency sample $sampleNumber" -ErrorRecord $_
+            }
+        }
+
+        if (-not $headsetPingTarget -and ($sampleNumber % 30) -eq 1) {
+            $headsetPingTarget = Find-HeadsetIpv4FromSteamLogs -SteamRoots $steamRoots
+            if ($headsetPingTarget) {
+                Write-CollectorLog "Detected possible headset IPv4 address from Steam logs: $headsetPingTarget"
+                @(
+                    "Headset IPv4 target: $headsetPingTarget"
+                    "Detection method: DetectedFromSteamLogs"
+                    "The target is used only for passive ICMP latency/loss sampling."
+                ) | Set-Content -LiteralPath (Join-Path $dirs.Network "headset-ping-target.txt") -Encoding UTF8
+            }
+        }
+        if ($headsetPingTarget) {
+            try {
+                $escapedHeadset = $headsetPingTarget.Replace("'", "''")
+                $headsetPing = Get-CimInstance Win32_PingStatus `
+                    -Filter ("Address='{0}'" -f $escapedHeadset) -ErrorAction Stop
+                [pscustomobject]@{
+                    Timestamp = $sampleTime.ToString("o")
+                    Target = $headsetPingTarget
+                    StatusCode = $headsetPing.StatusCode
+                    ResponseTimeMs = $headsetPing.ResponseTime
+                } | Export-Csv -LiteralPath $liveHeadsetPath -Append `
+                    -NoTypeInformation -Encoding UTF8
+            }
+            catch {
+                Write-CollectionError -Step "Headset latency sample $sampleNumber" -ErrorRecord $_
+            }
+        }
+
+        if (($sampleNumber % 30) -eq 1) {
+            try {
+                Add-Content -LiteralPath $liveWifiPath `
+                    -Value ("`r`n=== {0} ===" -f $sampleTime.ToString("o")) `
+                    -Encoding UTF8
+                netsh.exe wlan show interfaces 2>&1 |
+                    Add-Content -LiteralPath $liveWifiPath -Encoding UTF8
+            }
+            catch {
+                Write-CollectionError -Step "Wi-Fi interface sample $sampleNumber" -ErrorRecord $_
+            }
+        }
+
+        if (($sampleNumber % 10) -eq 1) {
+            try {
+                foreach ($steamRoot in $steamRoots) {
+                    foreach ($name in @("driver_vrlink.txt", "vrserver.txt", "vrcompositor.txt")) {
+                        $path = Join-Path (Join-Path $steamRoot "logs") $name
+                        if (
+                            (Test-Path -LiteralPath $path) -and
+                            $path -notin $steamLinkLogs
+                        ) {
+                            $steamLinkLogs += $path
+                            $steamLogOffsets[$path] = 0
+                        }
+                    }
+                }
+
+                $driverText = ""
+                $serverText = ""
+                $compositorText = ""
+                foreach ($path in $steamLinkLogs) {
+                    $newText = Read-AppendedText -Path $path -Offsets $steamLogOffsets
+                    switch -Regex (Split-Path -Leaf $path) {
+                        "^driver_vrlink" { $driverText += "`r`n$newText" }
+                        "^vrserver" { $serverText += "`r`n$newText" }
+                        "^vrcompositor" { $compositorText += "`r`n$newText" }
+                    }
+                }
+
+                $delays = @(
+                    [regex]::Matches($driverText, '\bd=([0-9.]+)') |
+                        ForEach-Object { [double]$_.Groups[1].Value }
+                )
+                $linkStatusMatches = @(
+                    [regex]::Matches(
+                        $driverText,
+                        '[0-9.]+\s+mbit/s\s+->\s+[0-9.]+\s+mbit/s,\s+ping\s+[0-9.]+\s+ms,\s+holdoff\s+[0-9]+,\s+auto\s+[01]',
+                        [Text.RegularExpressions.RegexOptions]::IgnoreCase
+                    )
+                )
+
+                [pscustomobject]@{
+                    Timestamp = $sampleTime.ToString("o")
+                    BadLinkEvents = [regex]::Matches(
+                        $driverText,
+                        'Bad link event',
+                        [Text.RegularExpressions.RegexOptions]::IgnoreCase
+                    ).Count
+                    ThrottleEvents = [regex]::Matches(
+                        $driverText,
+                        'THROTTLE EVENT',
+                        [Text.RegularExpressions.RegexOptions]::IgnoreCase
+                    ).Count
+                    MaximumDeliveryDelayMs = if ($delays.Count) {
+                        ($delays | Measure-Object -Maximum).Maximum
+                    }
+                    else {
+                        0
+                    }
+                    LatestLinkStatus = if ($linkStatusMatches.Count) {
+                        $linkStatusMatches[-1].Value
+                    }
+                    else {
+                        ""
+                    }
+                    VideoPacketTimeouts = [regex]::Matches(
+                        $serverText,
+                        'Timed out waiting for another accepted video packet',
+                        [Text.RegularExpressions.RegexOptions]::IgnoreCase
+                    ).Count
+                    UnrecoverableErrors = [regex]::Matches(
+                        $serverText,
+                        'HandleUnrecoverableError',
+                        [Text.RegularExpressions.RegexOptions]::IgnoreCase
+                    ).Count
+                    StreamResets = [regex]::Matches(
+                        $serverText,
+                        'Reset video stream|ReportStreamReset',
+                        [Text.RegularExpressions.RegexOptions]::IgnoreCase
+                    ).Count
+                    CompositorDisconnects = [regex]::Matches(
+                        $serverText,
+                        'vrcompositor disconnected',
+                        [Text.RegularExpressions.RegexOptions]::IgnoreCase
+                    ).Count
+                    PresentTimeouts = [regex]::Matches(
+                        $compositorText,
+                        'WaitForPresent|WaitForAcquire timed out',
+                        [Text.RegularExpressions.RegexOptions]::IgnoreCase
+                    ).Count
+                    CompositorWatchdogs = [regex]::Matches(
+                        $compositorText,
+                        'watchdog',
+                        [Text.RegularExpressions.RegexOptions]::IgnoreCase
+                    ).Count
+                } | Export-Csv -LiteralPath $liveSteamLinkPath -Append `
+                    -NoTypeInformation -Encoding UTF8
+            }
+            catch {
+                Write-CollectionError -Step "Steam Link health sample $sampleNumber" -ErrorRecord $_
+            }
+        }
+
         if ($script:AmdSmi) {
             try {
                 $rawAmdMetrics = @(

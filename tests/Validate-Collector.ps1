@@ -29,6 +29,10 @@ $requiredPatterns = @{
     "NVIDIA telemetry" = "Get-NvidiaSmi"
     "AMD telemetry" = "Get-AmdSmi"
     "Vendor-neutral GPU telemetry" = "GPUPerformanceCounters_GPUEngine"
+    "Live network telemetry" = "liveNetworkPath"
+    "Gateway latency telemetry" = "liveGatewayPath"
+    "Headset latency telemetry" = "liveHeadsetPath"
+    "Steam Link health telemetry" = "liveSteamLinkPath"
     "Graceful early stop" = "ConsoleKey]::Enter"
     "Post-sample log refresh" = "Refreshing logs generated during the live sample"
 }

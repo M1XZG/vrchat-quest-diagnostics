@@ -1,0 +1,32 @@
+name: Feature request
+description: Suggest new hardware, runtime, transport, or analysis coverage.
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: need
+    attributes:
+      label: Diagnostic gap
+      description: What problem cannot be diagnosed with the current collector?
+    validations:
+      required: true
+  - type: textarea
+    id: platform
+    attributes:
+      label: Relevant platform
+      description: Include hardware vendor, headset, runtime, and wired/wireless transport.
+    validations:
+      required: true
+  - type: textarea
+    id: proposed-data
+    attributes:
+      label: Proposed evidence
+      description: What command, log, counter, or configuration would help?
+  - type: textarea
+    id: privacy
+    attributes:
+      label: Privacy considerations
+      description: Could this data contain identifiers, tokens, messages, or private files?
+    validations:
+      required: true

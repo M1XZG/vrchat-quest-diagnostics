@@ -17,6 +17,8 @@ Meta Quest Link, SteamVR, OpenXR, and related PC hardware.
 - A failed collection step must be recorded and must not abort unrelated steps.
 - NVIDIA, AMD, and Intel systems must retain a useful vendor-neutral collection
   path. Vendor tools are optional enhancements, never requirements.
+- Treat the PC's LAN uplink and the headset's transport as separate facts. A PC
+  on Ethernet may stream to a headset over Wi-Fi through the local router.
 - Output must remain a timestamped folder and ZIP with a readable summary,
   privacy report, collection-error log, and file manifest.
 
@@ -34,6 +36,13 @@ event logs, and WER metadata as the baseline.
 
 Do not infer a temperature, clock, power, or health value that the system did
 not expose.
+
+Network collection should remain passive. Record local adapter counters, active
+routes, gateway latency, driver events, and application-reported transport
+metrics. Steam Link collection should preserve bad-link, delivery-delay,
+bitrate/adaptive, timeout, reset, disconnect, and compositor-watchdog evidence.
+Do not scan the LAN or probe public hosts. A user-supplied or log-derived private
+headset address may be pinged during an active diagnostic run.
 
 ## Privacy review
 
