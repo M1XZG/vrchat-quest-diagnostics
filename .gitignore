@@ -1,0 +1,5 @@
+*.zip
+VRChat-Quest-Diagnostics-*/
+tmp/
+.DS_Store
+Thumbs.db
