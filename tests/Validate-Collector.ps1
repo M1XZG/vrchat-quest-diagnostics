@@ -25,6 +25,7 @@ $content = Get-Content -LiteralPath $collector -Raw
 $requiredPatterns = @{
     "Administrator elevation" = "Test-Administrator"
     "Privacy redaction" = "Redact-CopiedText"
+    "Timestamp-safe IPv6 redaction" = "Redact-Ipv6Addresses"
     "Opt-in crash dumps" = "IncludeCrashDumps"
     "NVIDIA telemetry" = "Get-NvidiaSmi"
     "AMD telemetry" = "Get-AmdSmi"
@@ -33,6 +34,7 @@ $requiredPatterns = @{
     "Gateway latency telemetry" = "liveGatewayPath"
     "Headset latency telemetry" = "liveHeadsetPath"
     "Steam Link health telemetry" = "liveSteamLinkPath"
+    "Reachable headset auto-detection" = "ping.StatusCode -eq 0"
     "Graceful early stop" = "ConsoleKey]::Enter"
     "Post-sample log refresh" = "Refreshing logs generated during the live sample"
 }

@@ -316,6 +316,11 @@ function Find-HeadsetIpv4FromSteamLogs {
     if ($gateway) {
         $excluded += $gateway.NextHop
     }
+    $excluded += @(
+        Get-NetRoute -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+            Where-Object { $_.NextHop -and $_.NextHop -ne "0.0.0.0" } |
+            Select-Object -ExpandProperty NextHop -Unique
+    )
 
     $candidates = [System.Collections.Generic.List[string]]::new()
     foreach ($steamRoot in $SteamRoots) {
@@ -338,10 +343,25 @@ function Find-HeadsetIpv4FromSteamLogs {
         }
     }
 
-    return $candidates |
-        Group-Object |
-        Sort-Object Count -Descending |
-        Select-Object -First 1 -ExpandProperty Name
+    foreach ($candidate in (
+        $candidates |
+            Group-Object |
+            Sort-Object Count -Descending
+    )) {
+        try {
+            $escapedCandidate = $candidate.Name.Replace("'", "''")
+            $ping = Get-CimInstance Win32_PingStatus `
+                -Filter ("Address='{0}'" -f $escapedCandidate) `
+                -ErrorAction Stop
+            if ($ping.StatusCode -eq 0) {
+                return $candidate.Name
+            }
+        }
+        catch {
+        }
+    }
+
+    return $null
 }
 
 function Read-AppendedText {
@@ -671,6 +691,38 @@ function Redact-PublicIpv4 {
     return $result
 }
 
+function Redact-Ipv6Addresses {
+    param([string]$Text)
+
+    $script:Ipv6Redactions = 0
+    $regex = [regex]::new(
+        '(?i)(?<![0-9a-f:])(?:[0-9a-f]{0,4}:){2,7}[0-9a-f]{0,4}(?![0-9a-f:])'
+    )
+    $result = $regex.Replace($Text, {
+        param($match)
+
+        $candidate = $match.Value
+        $colonCount = ($candidate.ToCharArray() | Where-Object { $_ -eq ':' }).Count
+        if ($colonCount -lt 4 -and -not $candidate.Contains("::")) {
+            return $candidate
+        }
+
+        $address = $null
+        if (
+            [System.Net.IPAddress]::TryParse($candidate, [ref]$address) -and
+            $address.AddressFamily -eq
+                [System.Net.Sockets.AddressFamily]::InterNetworkV6
+        ) {
+            $script:Ipv6Redactions++
+            return "<IPV6_ADDRESS>"
+        }
+        return $candidate
+    })
+
+    Add-RedactionCount -Category "IPV6_ADDRESS" -Count $script:Ipv6Redactions
+    return $result
+}
+
 function Redact-CopiedText {
     Write-CollectorLog "Redacting obvious personal identifiers in copied text."
 
@@ -730,9 +782,7 @@ function Redact-CopiedText {
             $text = Replace-TextPattern -Text $text `
                 -Pattern '(?i)(?<![0-9a-f])(?:[0-9a-f]{2}[:-]){5}[0-9a-f]{2}(?![0-9a-f])' `
                 -Replacement "<MAC_ADDRESS>" -Category "MAC_ADDRESS"
-            $text = Replace-TextPattern -Text $text `
-                -Pattern '(?i)(?<![0-9a-f:])(?:[0-9a-f]{1,4}:){2,7}[0-9a-f]{1,4}(?![0-9a-f:])' `
-                -Replacement "<IPV6_ADDRESS>" -Category "IPV6_ADDRESS"
+            $text = Redact-Ipv6Addresses -Text $text
             $text = Redact-PublicIpv4 -Text $text
 
             Set-Content -LiteralPath $file.FullName -Value $text -Encoding UTF8
