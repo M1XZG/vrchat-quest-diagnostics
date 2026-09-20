@@ -26,6 +26,7 @@ $requiredPatterns = @{
     "Administrator elevation" = "Test-Administrator"
     "Privacy redaction" = "Redact-CopiedText"
     "Timestamp-safe IPv6 redaction" = "Redact-Ipv6Addresses"
+    "Context-aware IPv4 redaction" = "context -notmatch"
     "Opt-in crash dumps" = "IncludeCrashDumps"
     "NVIDIA telemetry" = "Get-NvidiaSmi"
     "AMD telemetry" = "Get-AmdSmi"

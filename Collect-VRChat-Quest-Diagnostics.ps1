@@ -679,6 +679,31 @@ function Redact-PublicIpv4 {
             return $match.Value
         }
 
+        $prefixStart = [math]::Max(0, $match.Index - 48)
+        $prefix = $Text.Substring(
+            $prefixStart,
+            $match.Index - $prefixStart
+        )
+        if (
+            $prefix -match
+                '(?i)\b(?:version|driver|runtime|sdk|build|module|firmware)\s*[:=]?\s*$'
+        ) {
+            return $match.Value
+        }
+
+        $contextStart = [math]::Max(0, $match.Index - 32)
+        $contextLength = [math]::Min(
+            $Text.Length - $contextStart,
+            $match.Length + 64
+        )
+        $context = $Text.Substring($contextStart, $contextLength)
+        if (
+            $context -notmatch
+                '(?i)(?:\b(?:ip|address|remote|peer|endpoint|gateway|socket|host)\b|://)'
+        ) {
+            return $match.Value
+        }
+
         $script:PublicIpv4Redactions++
         return "<PUBLIC_IPV4>"
     })
